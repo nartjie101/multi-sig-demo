@@ -264,8 +264,10 @@ export default function Home() {
         signerAddress: account,
         chainId,
       })
-        .then(() => {
-          if (SafeWalletService.isOwner(account)) {
+        .then(async () => {
+          const isOwner = await SafeWalletService.isOwner(account);
+
+          if (isOwner) {
             refreshTransactions();
           } else {
             setTransactions([]);

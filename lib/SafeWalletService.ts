@@ -70,8 +70,11 @@ class SafeWalletServiceClass {
     this.chainId = params.chainId;
   }
 
-  isOwner(address: string) {
-    return this.safeInfo?.owners.some(
+  async isOwner(address: string) {
+    const safeAddress = this.requireSafeAddress();
+    const apiKit = this.requireApiKit();
+    const safeInfo = await apiKit.getSafeInfo(safeAddress);
+    return safeInfo.owners.some(
       (owner) => owner.toLowerCase() === address.toLowerCase(),
     );
   }
