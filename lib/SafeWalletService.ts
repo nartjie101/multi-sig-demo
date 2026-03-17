@@ -1,4 +1,4 @@
-import SafeApiKit, { SafeInfoResponse } from "@safe-global/api-kit";
+import SafeApiKit from "@safe-global/api-kit";
 import type {
   CreateTransactionProps,
   Eip1193Provider,
@@ -21,7 +21,6 @@ class SafeWalletServiceClass {
   private apiKit: SafeApiKit | null = null;
   private signerAddress: string | null = null;
   private chainId: string | null = null;
-  private safeInfo: SafeInfoResponse | null = null;
 
   async initialize(params: InitializeParams) {
     if (!SAFE_API_KEY) {
@@ -56,15 +55,6 @@ class SafeWalletServiceClass {
       chainId: BigInt(params.chainId),
       apiKey: SAFE_API_KEY,
     });
-
-    this.apiKit
-      .getSafeInfo(safeAddress)
-      .then((safeInfo) => {
-        this.safeInfo = safeInfo;
-      })
-      .catch((e) => {
-        console.error("error getting safe info", e);
-      });
 
     this.signerAddress = signerAddress;
     this.chainId = params.chainId;
