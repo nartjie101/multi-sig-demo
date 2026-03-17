@@ -1,0 +1,67 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run on Dat’s iPhone 12",
+            "request": "launch",
+            "type": "reactnativedirect",
+            "cwd": "${workspaceFolder}",
+            "enableDebug": true,
+            "platform": "ios",
+            "target": "00008101-001C31E20E2A001E",
+            "runArguments": ["--scheme=hahaDev", "--device=Dat’s iPhone 15"]
+        },
+        {
+            "name": "Debug iOS Hermes - Dev",
+            "request": "launch",
+            "type": "reactnativedirect",
+            "cwd": "${workspaceFolder}",
+            "platform": "ios",
+            "enableDebug": true,
+            "runArguments": ["--scheme=hahaDev", "--simulator", "iPhone 16 Pro"]
+        },
+        {
+            "name": "Debug iOS Hermes - Staging",
+            "request": "launch",
+            "type": "reactnativedirect",
+            "cwd": "${workspaceFolder}",
+            "platform": "ios",
+            "runArguments": ["--scheme=hahaStaging", "--simulator", "iPhone 16 Pro"]
+        },
+        {
+            "name": "Debug iOS Hermes - Prod",
+            "request": "launch",
+            "type": "reactnativedirect",
+            "cwd": "${workspaceFolder}",
+            "platform": "ios",
+            "runArguments": ["--scheme=haha", "--simulator", "iPhone 16 Pro"]
+        },
+        {
+            "name": "Debug Android - Dev",
+            "cwd": "${workspaceFolder}",
+            "type": "reactnative",
+            "request": "launch",
+            "platform": "android",
+            "enableDebug": false,
+            "runArguments": ["--mode=devDebug", "--appIdSuffix=dev", "--active-arch-only"]
+        },
+        {
+            "name": "Debug Android - Staging",
+            "cwd": "${workspaceFolder}",
+            "type": "reactnative",
+            "request": "launch",
+            "platform": "android",
+            "enableDebug": false,
+            "runArguments": ["--mode=stagingDebug", "--appIdSuffix=staging", "--active-arch-only"]
+        },
+        {
+            "name": "Debug Android - Prod",
+            "cwd": "${workspaceFolder}",
+            "type": "reactnative",
+            "request": "launch",
+            "platform": "android",
+            "enableDebug": false,
+            "variant": "prodDebug"
+        }
+    ]
+}
