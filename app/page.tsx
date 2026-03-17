@@ -45,10 +45,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const visibleTransactions = useMemo(
-    () => transactions.slice(0, 3),
-    [transactions],
-  );
+  const visibleTransactions = useMemo(() => transactions, [transactions]);
 
   const getInjectedProvider = useCallback(() => {
     if (typeof window === "undefined" || !window.haha) {
