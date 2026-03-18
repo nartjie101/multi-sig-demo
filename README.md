@@ -17,6 +17,8 @@ Create `.env.local`:
 ```bash
 NEXT_PUBLIC_SAFE_API_KEY="your-safe-transaction-service-api-key"
 NEXT_PUBLIC_SAFE_ADDRESS="0xYourSafeAddress"
+GRAPHQL_ENDPOINT="https://your-backend/graphql"
+DEPOSIT_INTENT_ADMIN_API_KEY="your-backend-admin-key"
 ```
 
 Notes:
@@ -24,6 +26,8 @@ Notes:
 - `NEXT_PUBLIC_SAFE_ADDRESS` must be a valid checksum-compatible address.
 - The app is configured to use chain ID `143`.
 - Safe Transaction Service requests are authenticated with `NEXT_PUBLIC_SAFE_API_KEY`.
+- Deposit-intent admin requests are proxied server-side to `GRAPHQL_ENDPOINT` using `DEPOSIT_INTENT_ADMIN_API_KEY`.
+- If `GRAPHQL_ENDPOINT` is omitted, the app falls back to `https://dev.sv.haha.me/graphql`.
 
 ## Run
 
