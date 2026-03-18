@@ -111,9 +111,20 @@ class SafeWalletServiceClass {
     await apiKit.confirmTransaction(safeTxHash, ownerSignature.data);
   }
 
-  async executeTransaction(tx: SafeMultisigTransactionResponse) {
+  async executeTransaction(
+    tx: SafeMultisigTransactionResponse,
+  ): Promise<string | undefined> {
     const protocolKit = this.requireProtocolKit();
-    await protocolKit.executeTransaction(tx);
+    const execution = await protocolKit.executeTransaction(tx);
+    const maybeHash =
+      (execution as { hash?: unknown } | undefined)?.hash ??
+      (
+        execution as {
+          transactionResponse?: { hash?: unknown };
+        } | undefined
+      )?.transactionResponse?.hash;
+
+    return typeof maybeHash === "string" ? maybeHash : undefined;
   }
 
   async rejectTransaction(nonce: string): Promise<string> {

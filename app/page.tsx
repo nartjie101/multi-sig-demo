@@ -1,5 +1,12 @@
 "use client";
 
+import {
+  confirmDepositIntentBatch,
+  fetchDepositIntentAdminOverview,
+  generateDepositIntentBatch,
+  type DepositIntentAdminOverview,
+  type GeneratedDepositIntentBatch,
+} from "@/lib/deposit-intent";
 import { formatMon, hasSigned, shortAddress } from "@/lib/safe";
 import SafeWalletService from "@/lib/SafeWalletService";
 import type {
@@ -11,7 +18,13 @@ import {
   type SafeMultisigTransactionResponse,
 } from "@safe-global/types-kit";
 import { getAddress, parseEther } from "ethers";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 type TxActionState = {
   safeTxHash: string;
@@ -25,6 +38,28 @@ type EventfulEip1193Provider = Eip1193Provider & {
     handler: (...args: unknown[]) => void,
   ) => void;
 };
+
+type GeneratedBatchState = GeneratedDepositIntentBatch & {
+  safeTxHashes: Record<string, string>;
+  txHashes: Record<string, string>;
+};
+
+const SAFE_ADDRESS = process.env.NEXT_PUBLIC_SAFE_ADDRESS || "";
+
+function formatTimestamp(value?: number) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function formatDeadline(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString();
+}
+
+function getOrigin(tx: SafeMultisigTransactionResponse): string | undefined {
+  const value = (tx as { origin?: unknown }).origin;
+  return typeof value === "string" ? value : undefined;
+}
 
 export default function Home() {
   const [chainId] = useState("143");
@@ -45,6 +80,20 @@ export default function Home() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  const [depositOverview, setDepositOverview] =
+    useState<DepositIntentAdminOverview | null>(null);
+  const [selectedIntentIds, setSelectedIntentIds] = useState<string[]>([]);
+  const [activeBatch, setActiveBatch] = useState<GeneratedBatchState | null>(
+    null,
+  );
+  const [isRefreshingDepositOverview, setIsRefreshingDepositOverview] =
+    useState(false);
+  const [isGeneratingDepositBatch, setIsGeneratingDepositBatch] =
+    useState(false);
+  const [isProposingDepositBatch, setIsProposingDepositBatch] = useState(false);
+  const [isConfirmingDepositBatch, setIsConfirmingDepositBatch] =
+    useState(false);
+
   const visibleTransactions = useMemo(() => transactions, [transactions]);
 
   const getInjectedProvider = useCallback(() => {
@@ -57,6 +106,17 @@ export default function Home() {
     return window.haha as Eip1193Provider;
   }, []);
 
+  const clearWalletState = useCallback(() => {
+    setAccount("");
+    setConnectError("");
+    setGeneratedSafeTxHash("");
+    setSuccess("");
+    setTransactions([]);
+    setDepositOverview(null);
+    setSelectedIntentIds([]);
+    setActiveBatch(null);
+  }, []);
+
   const connectWallet = useCallback(async () => {
     setConnectError("");
 
@@ -66,9 +126,6 @@ export default function Home() {
       const accounts = (await injectedProvider.request({
         method: "eth_requestAccounts",
       })) as string[];
-      const chain = (await injectedProvider.request({
-        method: "eth_chainId",
-      })) as string;
 
       if (!accounts?.[0]) {
         throw new Error("No account returned from wallet.");
@@ -81,14 +138,6 @@ export default function Home() {
       );
     }
   }, [getInjectedProvider]);
-
-  const clearWalletState = useCallback(() => {
-    setAccount("");
-    setConnectError("");
-    setGeneratedSafeTxHash("");
-    setSuccess("");
-    setTransactions([]);
-  }, []);
 
   const disconnectWallet = useCallback(async () => {
     setConnectError("");
@@ -144,6 +193,27 @@ export default function Home() {
       setError(e instanceof Error ? e.message : "Failed to load transactions.");
     } finally {
       setIsRefreshing(false);
+    }
+  }, []);
+
+  const refreshDepositOverview = useCallback(async () => {
+    setIsRefreshingDepositOverview(true);
+    try {
+      const overview = await fetchDepositIntentAdminOverview(undefined, 25);
+      setDepositOverview(overview);
+      setSelectedIntentIds((current) =>
+        current.filter((intentId) =>
+          overview.pendingIntents.some((intent) => intent.intentId === intentId),
+        ),
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to load deposit intent overview.",
+      );
+    } finally {
+      setIsRefreshingDepositOverview(false);
     }
   }, []);
 
@@ -216,7 +286,6 @@ export default function Home() {
       setActionState({ safeTxHash: nonce, action: "reject" });
       try {
         await SafeWalletService.rejectTransaction(nonce);
-
         setSuccess(`Proposed rejection transaction for nonce ${nonce}.`);
         await refreshTransactions();
       } catch (e) {
@@ -238,8 +307,36 @@ export default function Home() {
       setSuccess("");
       setActionState({ safeTxHash: tx.safeTxHash, action: "execute" });
       try {
-        await SafeWalletService.executeTransaction(tx);
-        setSuccess(`Executed transaction ${tx.safeTxHash}.`);
+        const executedTxHash = await SafeWalletService.executeTransaction(tx);
+        setSuccess(
+          executedTxHash
+            ? `Executed transaction ${tx.safeTxHash} on-chain as ${executedTxHash}.`
+            : `Executed transaction ${tx.safeTxHash}.`,
+        );
+
+        setActiveBatch((current) => {
+          if (!current || !executedTxHash) {
+            return current;
+          }
+
+          const matchingIntentId = Object.entries(current.safeTxHashes).find(
+            ([, safeTxHash]) =>
+              safeTxHash.toLowerCase() === tx.safeTxHash.toLowerCase(),
+          )?.[0];
+
+          if (!matchingIntentId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            txHashes: {
+              ...current.txHashes,
+              [matchingIntentId]: executedTxHash,
+            },
+          };
+        });
+
         await refreshTransactions();
       } catch (e) {
         setError(
@@ -252,37 +349,186 @@ export default function Home() {
     [refreshTransactions],
   );
 
+  const generateDepositBatchAction = useCallback(async () => {
+    setError("");
+    setSuccess("");
+    setIsGeneratingDepositBatch(true);
+
+    try {
+      const batch = await generateDepositIntentBatch({
+        intentIds: selectedIntentIds.length > 0 ? selectedIntentIds : undefined,
+        executorAddress: SAFE_ADDRESS || undefined,
+      });
+
+      const nextBatch: GeneratedBatchState = {
+        ...batch,
+        safeTxHashes: {},
+        txHashes: Object.fromEntries(batch.intentIds.map((id) => [id, ""])),
+      };
+
+      setActiveBatch(nextBatch);
+      setSuccess(
+        `Generated deposit batch ${batch.batchId} with ${batch.intentCount} intent(s).`,
+      );
+      await refreshDepositOverview();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Failed to generate deposit batch.",
+      );
+    } finally {
+      setIsGeneratingDepositBatch(false);
+    }
+  }, [refreshDepositOverview, selectedIntentIds]);
+
+  const proposeDepositBatchToSafe = useCallback(async () => {
+    if (!activeBatch || !depositOverview) {
+      setError("Generate a deposit batch before proposing it to the Safe.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    setIsProposingDepositBatch(true);
+
+    try {
+      const nextSafeTxHashes: Record<string, string> = {
+        ...activeBatch.safeTxHashes,
+      };
+
+      for (let index = 0; index < activeBatch.intentIds.length; index += 1) {
+        const intentId = activeBatch.intentIds[index];
+        if (nextSafeTxHashes[intentId]) {
+          continue;
+        }
+
+        const safeTxHash = await SafeWalletService.proposeTransaction(
+          {
+            transactions: [
+              {
+                to: depositOverview.vaultState.vaultAddress,
+                value: "0",
+                data: activeBatch.calldatas[index],
+                operation: OperationType.Call,
+              },
+            ],
+          },
+          `deposit-intent:${activeBatch.batchId}:${intentId}`,
+        );
+
+        nextSafeTxHashes[intentId] = safeTxHash;
+      }
+
+      setActiveBatch((current) =>
+        current
+          ? {
+              ...current,
+              safeTxHashes: nextSafeTxHashes,
+            }
+          : current,
+      );
+
+      setSuccess(
+        `Proposed ${Object.keys(nextSafeTxHashes).length} deposit transaction(s) to the Safe.`,
+      );
+      await refreshTransactions();
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to propose deposit transactions to the Safe.",
+      );
+    } finally {
+      setIsProposingDepositBatch(false);
+    }
+  }, [activeBatch, depositOverview, refreshTransactions]);
+
+  const confirmDepositBatchAction = useCallback(async () => {
+    if (!activeBatch) {
+      setError("No generated deposit batch to confirm.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    setIsConfirmingDepositBatch(true);
+
+    try {
+      const results = activeBatch.intentIds.map((intentId) => ({
+        intentId,
+        txHash: activeBatch.txHashes[intentId]?.trim(),
+      }));
+
+      const missing = results.find((entry) => !entry.txHash);
+      if (missing) {
+        throw new Error(`Missing on-chain tx hash for intent ${missing.intentId}.`);
+      }
+
+      const invalid = results.find(
+        (entry) => !/^0x[a-fA-F0-9]{64}$/.test(entry.txHash),
+      );
+      if (invalid) {
+        throw new Error(`Invalid tx hash for intent ${invalid.intentId}.`);
+      }
+
+      const confirmation = await confirmDepositIntentBatch({
+        batchId: activeBatch.batchId,
+        results,
+      });
+
+      setSuccess(
+        `Confirmed batch ${activeBatch.batchId}: ${confirmation.successCount} success, ${confirmation.failCount} failed.`,
+      );
+      setActiveBatch(null);
+      await refreshDepositOverview();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Failed to confirm deposit batch.",
+      );
+    } finally {
+      setIsConfirmingDepositBatch(false);
+    }
+  }, [activeBatch, refreshDepositOverview]);
+
   useEffect(() => {
     connectWallet();
   }, [connectWallet]);
 
   useEffect(() => {
-    if (account) {
-      const connectedProvider = getInjectedProvider();
-      SafeWalletService.initialize({
-        provider: connectedProvider,
-        signerAddress: account,
-        chainId,
-      })
-        .then(async () => {
-          const isOwner = await SafeWalletService.isOwner(account);
-
-          if (isOwner) {
-            refreshTransactions();
-          } else {
-            setTransactions([]);
-            setError("You are not the owner of the Safe Wallet.");
-          }
-        })
-        .catch((e) => {
-          setError(
-            e instanceof Error
-              ? e.message
-              : "Failed to initialize Safe Wallet Service.",
-          );
-        });
+    if (!account) {
+      return;
     }
-  }, [account, chainId, getInjectedProvider, refreshTransactions]);
+
+    const connectedProvider = getInjectedProvider();
+    SafeWalletService.initialize({
+      provider: connectedProvider,
+      signerAddress: account,
+      chainId,
+    })
+      .then(async () => {
+        const isOwner = await SafeWalletService.isOwner(account);
+
+        if (isOwner) {
+          await Promise.all([refreshTransactions(), refreshDepositOverview()]);
+        } else {
+          setTransactions([]);
+          setDepositOverview(null);
+          setError("You are not the owner of the Safe Wallet.");
+        }
+      })
+      .catch((e) => {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Failed to initialize Safe Wallet Service.",
+        );
+      });
+  }, [
+    account,
+    chainId,
+    getInjectedProvider,
+    refreshDepositOverview,
+    refreshTransactions,
+  ]);
 
   useEffect(() => {
     let provider: EventfulEip1193Provider;
@@ -305,12 +551,12 @@ export default function Home() {
   }, [getInjectedProvider, handleAccountsChanged]);
 
   return (
-    <main className="mx-auto min-h-screen max-w-6xl space-y-6 px-4 py-8">
+    <main className="mx-auto min-h-screen max-w-7xl space-y-6 px-4 py-8">
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-        <h1 className="text-2xl font-semibold">Safe Multi-Sig Demo (Monad)</h1>
+        <h1 className="text-2xl font-semibold">Safe Multi-Sig Admin (Monad)</h1>
         <p className="mt-2 text-sm text-slate-400">
-          Uses <code>window.haha</code>, Safe Protocol Kit, and Safe Transaction
-          Service to test multi-sig transaction flow.
+          Uses <code>window.haha</code>, Safe Protocol Kit, Safe Transaction
+          Service, and the backend deposit-intent admin GraphQL surface.
         </p>
       </section>
 
@@ -337,6 +583,9 @@ export default function Home() {
           <span className="text-sm text-slate-300">
             Account: <strong>{account ? shortAddress(account) : "-"}</strong>
           </span>
+          <span className="text-sm text-slate-300">
+            Safe: <strong>{SAFE_ADDRESS ? shortAddress(SAFE_ADDRESS) : "-"}</strong>
+          </span>
         </div>
         {connectError && (
           <p className="mt-3 text-sm text-red-400">{connectError}</p>
@@ -344,7 +593,252 @@ export default function Home() {
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-        <h2 className="mb-4 text-lg font-semibold">Send Transaction</h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Deposit Intent Queue</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Generates one Safe proposal per intent so backend confirmation can
+              verify each `depositWithPermit2` vault tx individually.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={refreshDepositOverview}
+            className="rounded bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-60"
+            disabled={isRefreshingDepositOverview}
+          >
+            {isRefreshingDepositOverview ? "Refreshing..." : "Refresh Queue"}
+          </button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Gated
+            </div>
+            <div className="mt-2 text-lg font-semibold text-white">
+              {depositOverview?.vaultState.depositsGated ? "Yes" : "No"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Capacity
+            </div>
+            <div className="mt-2 break-all text-sm text-white">
+              {depositOverview?.vaultState.availableCapacity ?? "-"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Vault
+            </div>
+            <div className="mt-2 break-all font-mono text-xs text-white">
+              {depositOverview?.vaultState.vaultAddress ?? "-"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Execution mode
+            </div>
+            <div className="mt-2 text-lg font-semibold text-white">
+              {depositOverview?.executionMode ?? "-"}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={generateDepositBatchAction}
+            className="rounded bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+            disabled={
+              isGeneratingDepositBatch ||
+              !depositOverview?.vaultState.depositsGated
+            }
+          >
+            {isGeneratingDepositBatch ? "Generating..." : "Generate Deposit Batch"}
+          </button>
+          <button
+            type="button"
+            onClick={proposeDepositBatchToSafe}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60"
+            disabled={!activeBatch || isProposingDepositBatch}
+          >
+            {isProposingDepositBatch ? "Proposing..." : "Propose Batch To Safe"}
+          </button>
+          <button
+            type="button"
+            onClick={confirmDepositBatchAction}
+            className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+            disabled={!activeBatch || isConfirmingDepositBatch}
+          >
+            {isConfirmingDepositBatch ? "Confirming..." : "Confirm Executed Batch"}
+          </button>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Pending Deposit Intents</h2>
+          <span className="text-sm text-slate-400">
+            {depositOverview?.pendingIntents.length ?? 0} shown
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700 text-left text-slate-300">
+                <th className="px-3 py-2">Pick</th>
+                <th className="px-3 py-2">Depositor</th>
+                <th className="px-3 py-2">Amount</th>
+                <th className="px-3 py-2">Nonce</th>
+                <th className="px-3 py-2">Deadline</th>
+                <th className="px-3 py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(depositOverview?.pendingIntents ?? []).length === 0 && (
+                <tr>
+                  <td className="px-3 py-4 text-slate-400" colSpan={6}>
+                    No pending deposit intents found.
+                  </td>
+                </tr>
+              )}
+              {(depositOverview?.pendingIntents ?? []).map((intent) => {
+                const checked = selectedIntentIds.includes(intent.intentId);
+                return (
+                  <tr key={intent.intentId} className="border-b border-slate-800">
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSelectedIntentIds((current) =>
+                            checked
+                              ? current.filter((value) => value !== intent.intentId)
+                              : [...current, intent.intentId],
+                          )
+                        }
+                      />
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {shortAddress(intent.depositor)}
+                    </td>
+                    <td className="px-3 py-2">{intent.amount}</td>
+                    <td className="px-3 py-2">{intent.nonce}</td>
+                    <td className="px-3 py-2">{formatDeadline(intent.deadline)}</td>
+                    <td className="px-3 py-2">
+                      {formatTimestamp(intent.createdAt)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {activeBatch && (
+        <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Active Deposit Batch</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Batch ID: <code>{activeBatch.batchId}</code>
+              </p>
+            </div>
+            <span className="text-sm text-slate-400">
+              {activeBatch.intentCount} intent(s)
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            {activeBatch.intentIds.map((intentId, index) => (
+              <article
+                key={intentId}
+                className="rounded-lg border border-slate-800 bg-slate-950 p-4"
+              >
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="text-sm text-slate-300">
+                      Intent: <code>{intentId}</code>
+                    </div>
+                    <div className="text-sm text-slate-300">
+                      SafeTxHash:{" "}
+                      <code>{activeBatch.safeTxHashes[intentId] || "-"}</code>
+                    </div>
+                    <label className="block space-y-1">
+                      <span className="text-sm text-slate-300">
+                        On-chain vault tx hash
+                      </span>
+                      <input
+                        value={activeBatch.txHashes[intentId] || ""}
+                        onChange={(event) =>
+                          setActiveBatch((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  txHashes: {
+                                    ...current.txHashes,
+                                    [intentId]: event.target.value,
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                        placeholder="0x..."
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <label className="block space-y-1">
+                    <span className="text-sm text-slate-300">Calldata</span>
+                    <textarea
+                      readOnly
+                      value={activeBatch.calldatas[index]}
+                      className="min-h-32 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs"
+                    />
+                  </label>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Recent Deposit Batches</h2>
+          <span className="text-sm text-slate-400">
+            {depositOverview?.recentBatches.length ?? 0} shown
+          </span>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {(depositOverview?.recentBatches ?? []).map((batch) => (
+            <article
+              key={batch.batchId}
+              className="rounded-lg border border-slate-800 bg-slate-950 p-4"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-white">{batch.batchId}</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                  {batch.status}
+                </div>
+              </div>
+              <div className="mt-3 space-y-1 text-sm text-slate-400">
+                <div>Trigger: {batch.trigger}</div>
+                <div>Total amount: {batch.totalAmount}</div>
+                <div>Intents: {batch.intentIds.length}</div>
+                <div>Started: {formatTimestamp(batch.startedAt)}</div>
+                <div>Finished: {formatTimestamp(batch.finishedAt)}</div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <h2 className="mb-4 text-lg font-semibold">Send Generic Transaction</h2>
         <form
           onSubmit={proposeTransaction}
           className="grid gap-4 md:grid-cols-3"
@@ -386,7 +880,7 @@ export default function Home() {
 
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">Pending Transactions</h2>
+          <h2 className="text-lg font-semibold">Pending Safe Transactions</h2>
           <button
             type="button"
             onClick={refreshTransactions}
@@ -403,7 +897,8 @@ export default function Home() {
               <tr className="border-b border-slate-700 text-left text-slate-300">
                 <th className="px-3 py-2">Nonce</th>
                 <th className="px-3 py-2">To</th>
-                <th className="px-3 py-2">Amount (MON)</th>
+                <th className="px-3 py-2">Value</th>
+                <th className="px-3 py-2">Origin</th>
                 <th className="px-3 py-2">Confirmations</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Actions</th>
@@ -412,7 +907,7 @@ export default function Home() {
             <tbody>
               {visibleTransactions.length === 0 && (
                 <tr>
-                  <td className="px-3 py-4 text-slate-400" colSpan={6}>
+                  <td className="px-3 py-4 text-slate-400" colSpan={7}>
                     No pending Safe transactions found.
                   </td>
                 </tr>
@@ -434,6 +929,9 @@ export default function Home() {
                       {shortAddress(tx.to)}
                     </td>
                     <td className="px-3 py-2">{formatMon(tx.value)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-400">
+                      {getOrigin(tx) || "-"}
+                    </td>
                     <td className="px-3 py-2">
                       {confirmations}/{required}
                     </td>
